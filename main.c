@@ -1,14 +1,17 @@
 /* main.c — Gesture Lock Application
  * Target: NUCLEO-G474RE | IMU: MPU-6050 (I2C1) | Servo: SG90 (TIM3 CH1)
+ *         Speaker: Adafruit STEMMA (TIM2 CH1)
  *
  * CubeMX prerequisites:
  *   I2C1  : PB8=SCL, PB9=SDA, Standard 100 kHz
  *   TIM3  : CH1 PWM on PA6, PSC=169, ARR=19999 (50 Hz, 1 us resolution)
+ *   TIM2  : CH1 PWM on PA0, PSC=169, ARR=999  (1 MHz clock, freq set at runtime)
  *   Link  : add -lm to linker flags
  *
  * Pin connections:
- *   MPU-6050  SCL -> PB8 (D15), SDA -> PB9 (D14), VCC -> 3.3V, AD0 -> GND
- *   SG90      PWM -> PA6 (D12), VCC -> 5V, GND -> GND
+ *   MPU-6050      SCL -> PB8 (D15), SDA -> PB9 (D14), VCC -> 3.3V, AD0 -> GND
+ *   SG90          PWM -> PA6 (D12), VCC -> 5V,   GND -> GND
+ *   STEMMA Speaker SIG -> PA0 (A0),  VCC -> 3.3V, GND -> GND
  */
 
 /* USER CODE BEGIN Includes */
@@ -30,6 +33,15 @@
 /* ── Servo pulse widths (us) — SG90 on 50 Hz / 1 us timer ──────── */
 #define SERVO_CENTER_US         1450u
 #define SERVO_US_PER_DEG        10.56f  /* (2400-500)/180 */
+
+/* ── Audio — STEMMA Speaker (TIM2 CH1, PA0, 1 MHz timer clock) ─── */
+#define AUDIO_TIMER_CLK_HZ      1000000UL
+#define AUDIO_READY_FREQ_HZ     1000u   /* two quick high beeps                  */
+#define AUDIO_ERROR_FREQ_HZ     300u    /* three low beeps                        */
+#define AUDIO_SWEEP_LO_HZ       500u    /* unlock sweep low end                  */
+#define AUDIO_SWEEP_HI_HZ       1500u   /* unlock sweep high end                 */
+#define AUDIO_SWEEP_STEP_MS     10u     /* ms per frequency step in sweep        */
+#define AUDIO_SWEEP_STEPS       50u     /* steps per sweep direction             */
 
 /* ── MPU-6050 ───────────────────────────────────────────────────── */
 #define MPU_ADDR                (0x68 << 1)
@@ -57,6 +69,7 @@ static const Gesture_t UNLOCK_SEQ[SEQUENCE_LEN] = {
 /* USER CODE BEGIN 0 */
 
 extern I2C_HandleTypeDef  hi2c1;
+extern TIM_HandleTypeDef  htim2;
 extern TIM_HandleTypeDef  htim3;
 
 /* ── Servo ──────────────────────────────────────────────────────── */
@@ -79,8 +92,56 @@ static void servo_error_feedback(void)
 static void servo_unlock(void)
 {
     servo_set(90.0f);
-    HAL_Delay(UNLOCK_HOLD_MS);
+    audio_unlock_sweep();                          /* sweep plays as servo opens    */
+    HAL_Delay(UNLOCK_HOLD_MS - (AUDIO_SWEEP_STEPS * 2 * AUDIO_SWEEP_STEP_MS));
     servo_set(0.0f);
+}
+
+/* ── Audio ──────────────────────────────────────────────────────── */
+
+static void audio_set_freq(uint32_t freq_hz)
+{
+    uint32_t arr = (AUDIO_TIMER_CLK_HZ / freq_hz) - 1;
+    __HAL_TIM_SET_AUTORELOAD(&htim2, arr);
+    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, arr / 2);
+}
+
+static void audio_tone(uint32_t freq_hz, uint32_t duration_ms)
+{
+    audio_set_freq(freq_hz);
+    HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
+    HAL_Delay(duration_ms);
+    HAL_TIM_PWM_Stop(&htim2, TIM_CHANNEL_1);
+}
+
+static void audio_ready(void)
+{
+    audio_tone(AUDIO_READY_FREQ_HZ, 80);
+    HAL_Delay(80);
+    audio_tone(AUDIO_READY_FREQ_HZ, 80);
+}
+
+static void audio_error(void)
+{
+    for (int i = 0; i < 3; i++) {
+        audio_tone(AUDIO_ERROR_FREQ_HZ, 150);
+        if (i < 2) HAL_Delay(100);
+    }
+}
+
+static void audio_unlock_sweep(void)
+{
+    /* 500 Hz -> 1500 Hz -> 500 Hz, one step every AUDIO_SWEEP_STEP_MS */
+    HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
+    for (uint32_t i = 0; i <= AUDIO_SWEEP_STEPS; i++) {
+        audio_set_freq(AUDIO_SWEEP_LO_HZ + (i * (AUDIO_SWEEP_HI_HZ - AUDIO_SWEEP_LO_HZ) / AUDIO_SWEEP_STEPS));
+        HAL_Delay(AUDIO_SWEEP_STEP_MS);
+    }
+    for (uint32_t i = AUDIO_SWEEP_STEPS; i > 0; i--) {
+        audio_set_freq(AUDIO_SWEEP_LO_HZ + (i * (AUDIO_SWEEP_HI_HZ - AUDIO_SWEEP_LO_HZ) / AUDIO_SWEEP_STEPS));
+        HAL_Delay(AUDIO_SWEEP_STEP_MS);
+    }
+    HAL_TIM_PWM_Stop(&htim2, TIM_CHANNEL_1);
 }
 
 /* ── MPU-6050 ───────────────────────────────────────────────────── */
@@ -184,6 +245,7 @@ static void wait_for_neutral(void)
     mpu_init();
     HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
     servo_set(0.0f);
+    audio_ready();    /* two beeps: system is ready for input */
     int step = 0;
 */
 /* USER CODE END 2 */
@@ -200,13 +262,15 @@ static void wait_for_neutral(void)
         if (g == UNLOCK_SEQ[step]) {
             step++;
             if (step == SEQUENCE_LEN) {
-                servo_unlock();
+                servo_unlock();       /* sweep plays simultaneously with open  */
                 step = 0;
+                audio_ready();        /* two beeps: back to idle, ready again  */
             } else {
                 HAL_Delay(POST_STEP_COOLDOWN_MS);
                 wait_for_neutral();
             }
         } else {
+            audio_error();            /* three low beeps before servo feedback */
             servo_error_feedback();
             HAL_Delay(ERROR_TIMEOUT_MS);
             step = 0;
