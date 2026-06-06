@@ -5,13 +5,13 @@
  * CubeMX prerequisites:
  *   I2C1  : PB8=SCL, PB9=SDA, Standard 100 kHz
  *   TIM3  : CH1 PWM on PA6, PSC=169, ARR=19999 (50 Hz, 1 us resolution)
- *   TIM2  : CH2 PWM on PA1, PSC=169, ARR=999  (1 MHz clock, freq set at runtime)
+ *   TIM1  : CH2 PWM on PA9, PSC=169, ARR=999  (1 MHz clock, freq set at runtime)
  *   Link  : add -lm to linker flags
  *
  * Pin connections:
  *   MPU-6050      SCL -> PB8 (D15), SDA -> PB9 (D14), VCC -> 3.3V, AD0 -> GND
  *   SG90          PWM -> PA6 (D12), VCC -> 5V,   GND -> GND
- *   STEMMA Speaker SIG -> PA1 (A1),  VCC -> 3.3V, GND -> GND
+ *   STEMMA Speaker SIG -> PA9 (D8),  VCC -> 3.3V, GND -> GND
  */
 
 /* USER CODE BEGIN Includes */
@@ -34,7 +34,7 @@
 #define SERVO_CENTER_US         1450u
 #define SERVO_US_PER_DEG        10.56f  /* (2400-500)/180 */
 
-/* ── Audio — STEMMA Speaker (TIM2 CH1, PA0, 1 MHz timer clock) ─── */
+/* ── Audio — STEMMA Speaker (TIM1 CH2, PA9/D8, 1 MHz timer clock) ─ */
 #define AUDIO_TIMER_CLK_HZ      1000000UL
 #define AUDIO_READY_FREQ_HZ     1000u   /* two quick high beeps                  */
 #define AUDIO_ERROR_FREQ_HZ     300u    /* three low beeps                        */
@@ -73,7 +73,7 @@ static const Gesture_t UNLOCK_SEQ[SEQUENCE_LEN] = {
 /* USER CODE BEGIN 0 */
 
 extern I2C_HandleTypeDef  hi2c1;
-extern TIM_HandleTypeDef  htim2;
+extern TIM_HandleTypeDef  htim1;
 extern TIM_HandleTypeDef  htim3;
 
 /* ── Button ─────────────────────────────────────────────────────── */
@@ -116,16 +116,16 @@ static void servo_unlock(void)
 static void audio_set_freq(uint32_t freq_hz)
 {
     uint32_t arr = (AUDIO_TIMER_CLK_HZ / freq_hz) - 1;
-    __HAL_TIM_SET_AUTORELOAD(&htim2, arr);
-    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, arr / 2);
+    __HAL_TIM_SET_AUTORELOAD(&htim1, arr);
+    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, arr / 2);
 }
 
 static void audio_tone(uint32_t freq_hz, uint32_t duration_ms)
 {
     audio_set_freq(freq_hz);
-    HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);
+    HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
     HAL_Delay(duration_ms);
-    HAL_TIM_PWM_Stop(&htim2, TIM_CHANNEL_2);
+    HAL_TIM_PWM_Stop(&htim1, TIM_CHANNEL_2);
 }
 
 static void audio_ready(void)
@@ -146,7 +146,7 @@ static void audio_error(void)
 static void audio_unlock_sweep(void)
 {
     /* 500 Hz -> 1500 Hz -> 500 Hz, one step every AUDIO_SWEEP_STEP_MS */
-    HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);
+    HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
     for (uint32_t i = 0; i <= AUDIO_SWEEP_STEPS; i++) {
         audio_set_freq(AUDIO_SWEEP_LO_HZ + (i * (AUDIO_SWEEP_HI_HZ - AUDIO_SWEEP_LO_HZ) / AUDIO_SWEEP_STEPS));
         HAL_Delay(AUDIO_SWEEP_STEP_MS);
@@ -155,7 +155,7 @@ static void audio_unlock_sweep(void)
         audio_set_freq(AUDIO_SWEEP_LO_HZ + (i * (AUDIO_SWEEP_HI_HZ - AUDIO_SWEEP_LO_HZ) / AUDIO_SWEEP_STEPS));
         HAL_Delay(AUDIO_SWEEP_STEP_MS);
     }
-    HAL_TIM_PWM_Stop(&htim2, TIM_CHANNEL_2);
+    HAL_TIM_PWM_Stop(&htim1, TIM_CHANNEL_2);
 }
 
 /* ── MPU-6050 ───────────────────────────────────────────────────── */
