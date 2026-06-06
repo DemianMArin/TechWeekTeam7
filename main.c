@@ -55,6 +55,10 @@
 typedef enum { NONE=0, PITCH_FWD, PITCH_BWD, ROLL_LEFT, ROLL_RIGHT } Gesture_t;
 /* USER CODE END PTD */
 
+/* USER CODE BEGIN PD - button */
+#define B1_PRESSED()  (HAL_GPIO_ReadPin(B1_GPIO_Port, B1_Pin) == GPIO_PIN_RESET)
+/* USER CODE END PD - button */
+
 /* USER CODE BEGIN PV */
 
 /* ── Unlock combo — edit these three to change the combination ───── */
@@ -71,6 +75,16 @@ static const Gesture_t UNLOCK_SEQ[SEQUENCE_LEN] = {
 extern I2C_HandleTypeDef  hi2c1;
 extern TIM_HandleTypeDef  htim2;
 extern TIM_HandleTypeDef  htim3;
+
+/* ── Button ─────────────────────────────────────────────────────── */
+
+static void wait_for_b1(void)
+{
+    while (!B1_PRESSED());    /* wait for press   */
+    HAL_Delay(50);            /* debounce         */
+    while (B1_PRESSED());     /* wait for release */
+    HAL_Delay(50);
+}
 
 /* ── Servo ──────────────────────────────────────────────────────── */
 
@@ -245,7 +259,8 @@ static void wait_for_neutral(void)
     mpu_init();
     HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
     servo_set(0.0f);
-    audio_ready();    /* two beeps: system is ready for input */
+    wait_for_b1();    /* system is silent until B1 pressed    */
+    audio_ready();    /* two beeps: now ready for gesture input */
     int step = 0;
 */
 /* USER CODE END 2 */
@@ -255,6 +270,14 @@ static void wait_for_neutral(void)
     while (1)
     {
         HAL_Delay(10);
+
+        if (B1_PRESSED()) {
+            HAL_Delay(50);          /* debounce         */
+            while (B1_PRESSED());   /* wait for release */
+            step = 0;
+            audio_ready();          /* two beeps: reset confirmed */
+            continue;
+        }
 
         Gesture_t g = detect_gesture();
         if (g == NONE) continue;
